@@ -160,6 +160,46 @@ def coerce_label_mapping(raw: Any) -> Dict[str, List[str]]:
     return mapping
 
 
+def try_directml_device() -> Optional[Any]:
+    try:
+        import torch_directml  # type: ignore
+    except Exception:
+        return None
+    try:
+        return torch_directml.device()
+    except Exception:
+        return None
+
+
+def resolve_device(requested: Optional[str]) -> Tuple[Any, str]:
+    if requested is None:
+        requested = "auto"
+    if not isinstance(requested, str):
+        requested = str(requested)
+    value = requested.strip().lower()
+    if value in {"", "auto"}:
+        if torch.cuda.is_available():
+            return torch.device("cuda"), "cuda"
+        dml_device = try_directml_device()
+        if dml_device is not None:
+            return dml_device, "directml"
+        return torch.device("cpu"), "cpu"
+    if value in {"cuda", "gpu"}:
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA requested but not available.")
+        return torch.device("cuda"), "cuda"
+    if value in {"directml", "dml"}:
+        dml_device = try_directml_device()
+        if dml_device is None:
+            raise RuntimeError(
+                "DirectML requested but unavailable. Install torch-directml and update GPU drivers."
+            )
+        return dml_device, "directml"
+    if value == "cpu":
+        return torch.device("cpu"), "cpu"
+    raise ValueError(f"Unknown device: {requested}")
+
+
 def parse_labels(raw: Any) -> List[str]:
     if raw is None:
         raise ValueError("No labels provided.")
@@ -335,6 +375,9 @@ def main() -> int:
     labels_default = config.get("labels", "enfant,famille,travail,autre")
     prompt_template_default = config.get("prompt_template", "a photo of {label}")
     model_default = config.get("model", "openai/clip-vit-base-patch32")
+    device_default = config.get("device", "auto")
+    if not isinstance(device_default, str) or not device_default.strip():
+        device_default = "auto"
     threshold_default = coerce_float(config.get("threshold"), 0.25)
     fallback_default = config.get("fallback_label")
     if isinstance(fallback_default, str) and not fallback_default.strip():
@@ -404,6 +447,11 @@ def main() -> int:
         "--model",
         default=model_default,
         help="CLIP model id on Hugging Face.",
+    )
+    parser.add_argument(
+        "--device",
+        default=device_default,
+        help="Device to use: auto, cpu, cuda, directml.",
     )
     parser.add_argument(
         "--threshold",
@@ -506,7 +554,12 @@ def main() -> int:
             print("No coarse labels provided for two-stage classification.", file=sys.stderr)
             return 2
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    try:
+        device, device_name = resolve_device(args.device)
+    except Exception as exc:
+        print(f"Device error: {exc}", file=sys.stderr)
+        return 2
+    print(f"Device: {device_name}")
     model = CLIPModel.from_pretrained(args.model).to(device)
     processor = CLIPProcessor.from_pretrained(args.model)
     model.eval()

@@ -3,6 +3,7 @@
   "labels": ["enfant", "famille", "travail", "potes", "sport", "vacances", "bricolages", "papiers", "autre"],
   "prompt_template": "a photo of {label}",
   "model": "openai/clip-vit-large-patch14",
+  "device": "directml",
   "top_k": 3,
   "batch_size": 4,
   "two_stage": true,

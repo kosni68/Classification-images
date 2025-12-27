@@ -1,3 +1,4 @@
 torch
+torch-directml; platform_system == "Windows"
 transformers
 pillow
