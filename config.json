@@ -1,0 +1,31 @@
+{
+  "input_dir": null,
+  "labels": ["enfant", "famille", "travail", "autre"],
+  "prompt_template": "a photo of {label}",
+  "model": "openai/clip-vit-base-patch32",
+  "threshold": 0.25,
+  "fallback_label": "autre",
+  "output_csv": null,
+  "recursive": false,
+  "copy_to": null,
+  "move_to": null,
+  "label_prompts": {
+    "enfant": [
+      "a photo of a child",
+      "a photo of a kid",
+      "a photo of a boy",
+      "a photo of a girl"
+    ],
+    "famille": [
+      "a photo of a family",
+      "a family portrait",
+      "parents with children"
+    ],
+    "travail": [
+      "people working",
+      "a person at work",
+      "office work",
+      "construction workers"
+    ]
+  }
+}
