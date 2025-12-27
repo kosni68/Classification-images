@@ -1,6 +1,6 @@
 {
   "input_dir": "./Images_test",
-  "labels": ["enfant", "famille", "travail", "autre"],
+  "labels": ["enfant", "famille", "travail", "potes", "sport", "vacances", "bricolages", "papiers", "autre"],
   "prompt_template": "a photo of {label}",
   "model": "openai/clip-vit-base-patch32",
   "threshold": 0.25,
@@ -26,6 +26,34 @@
       "a person at work",
       "office work",
       "construction workers"
+    ],
+    "potes": [
+      "a photo of friends",
+      "a group of friends",
+      "friends hanging out"
+    ],
+    "sport": [
+      "a sports scene",
+      "people playing sports",
+      "athletes in action"
+    ],
+    "vacances": [
+      "a vacation photo",
+      "people on holiday",
+      "a beach vacation",
+      "tourist travel"
+    ],
+    "bricolages": [
+      "a DIY project",
+      "home improvement work",
+      "tools and construction",
+      "crafting at home"
+    ],
+    "papiers": [
+      "documents and paperwork",
+      "papers on a desk",
+      "official documents",
+      "printed documents"
     ]
   }
 }
