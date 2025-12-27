@@ -1,5 +1,5 @@
 {
-  "input_dir": null,
+  "input_dir": "./Images_test",
   "labels": ["enfant", "famille", "travail", "autre"],
   "prompt_template": "a photo of {label}",
   "model": "openai/clip-vit-base-patch32",
