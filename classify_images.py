@@ -99,6 +99,15 @@ def coerce_float(value: Any, default: float) -> float:
         return default
 
 
+def coerce_int(value: Any, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def coerce_prompt_list(raw: Any) -> List[str]:
     if raw is None:
         return []
@@ -123,6 +132,32 @@ def merge_prompts(
         if cleaned:
             merged[label] = cleaned
     return merged
+
+
+def coerce_label_list(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    if isinstance(raw, str):
+        if not raw.strip():
+            return []
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    raise ValueError("Labels must be a list or comma-separated string.")
+
+
+def coerce_label_mapping(raw: Any) -> Dict[str, List[str]]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("coarse_to_fine must be a JSON object.")
+    mapping: Dict[str, List[str]] = {}
+    for key, value in raw.items():
+        label = str(key).strip()
+        if not label:
+            continue
+        mapping[label] = coerce_label_list(value)
+    return mapping
 
 
 def parse_labels(raw: Any) -> List[str]:
@@ -204,14 +239,13 @@ def build_label_features(
     return torch.stack(label_features, dim=0), labels
 
 
-def classify_image(
+def classify_image_probs(
     model: CLIPModel,
     processor: CLIPProcessor,
     label_features: torch.Tensor,
-    label_names: List[str],
     image_path: Path,
     device: str,
-) -> Tuple[str, float]:
+) -> torch.Tensor:
     with Image.open(image_path) as img:
         image = img.convert("RGB")
 
@@ -222,10 +256,25 @@ def classify_image(
     image_features = normalize(image_features)
 
     logits = image_features @ label_features.T
-    probs = logits.softmax(dim=-1).squeeze(0)
+    return logits.softmax(dim=-1).squeeze(0)
+
+
+def pick_best_label(label_names: List[str], probs: torch.Tensor) -> Tuple[str, float]:
     best_index = int(torch.argmax(probs).item())
-    best_score = float(probs[best_index].item())
-    return label_names[best_index], best_score
+    return label_names[best_index], float(probs[best_index].item())
+
+
+def top_k_from_probs(
+    label_names: List[str], probs: torch.Tensor, k: int
+) -> List[Tuple[str, float]]:
+    if k <= 0:
+        return []
+    k = min(k, probs.numel())
+    values, indices = torch.topk(probs, k)
+    top: List[Tuple[str, float]] = []
+    for rank, index in enumerate(indices):
+        top.append((label_names[int(index)], float(values[rank].item())))
+    return top
 
 
 def main() -> int:
@@ -265,6 +314,14 @@ def main() -> int:
     if isinstance(move_to_default, str) and not move_to_default.strip():
         move_to_default = None
     recursive_default = coerce_bool(config.get("recursive"), False)
+    top_k_default = coerce_int(config.get("top_k"), 1)
+    if top_k_default < 1:
+        top_k_default = 1
+    coarse_labels_default = config.get("coarse_labels")
+    coarse_to_fine_default = config.get("coarse_to_fine")
+    two_stage_default = coerce_bool(config.get("two_stage"), False)
+    if "two_stage" not in config and coarse_labels_default is not None:
+        two_stage_default = True
 
     config_prompts = config.get("label_prompts") or {}
     if not isinstance(config_prompts, dict):
@@ -274,6 +331,18 @@ def main() -> int:
         prompts_by_label = merge_prompts(BUILTIN_PROMPTS, config_prompts)
     except ValueError as exc:
         print(f"Invalid label_prompts: {exc}", file=sys.stderr)
+        return 2
+
+    coarse_prompts_config = config.get("coarse_label_prompts")
+    if coarse_prompts_config is None:
+        coarse_prompts_config = {}
+    if not isinstance(coarse_prompts_config, dict):
+        print("coarse_label_prompts must be a JSON object.", file=sys.stderr)
+        return 2
+    try:
+        coarse_prompts_by_label = merge_prompts(BUILTIN_PROMPTS, coarse_prompts_config)
+    except ValueError as exc:
+        print(f"Invalid coarse_label_prompts: {exc}", file=sys.stderr)
         return 2
 
     parser = argparse.ArgumentParser(description="Classify images in a folder using CLIP.")
@@ -309,6 +378,24 @@ def main() -> int:
         default=fallback_default,
         help='Label to use when score is low. If omitted and "autre" is in labels, it is used.',
     )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=top_k_default,
+        help="Include top-K predictions in CSV.",
+    )
+    parser.add_argument(
+        "--two-stage",
+        action="store_true",
+        default=two_stage_default,
+        help="Enable two-stage classification if coarse labels are configured.",
+    )
+    parser.add_argument(
+        "--no-two-stage",
+        action="store_false",
+        dest="two_stage",
+        help="Disable two-stage classification.",
+    )
     parser.add_argument("--output-csv", default=output_csv_default, help="CSV output path.")
     parser.add_argument(
         "--recursive",
@@ -333,6 +420,7 @@ def main() -> int:
         help="Move images into label subfolders under this directory.",
     )
     args = parser.parse_args()
+    top_k = max(1, args.top_k)
 
     if args.copy_to and args.move_to:
         print("Use only one of --copy-to or --move-to.", file=sys.stderr)
@@ -353,16 +441,68 @@ def main() -> int:
         print("No candidate labels left after removing fallback label.", file=sys.stderr)
         return 2
 
+    coarse_labels: List[str] = []
+    coarse_to_fine: Dict[str, List[str]] = {}
+    if args.two_stage:
+        if coarse_labels_default is None:
+            print("two-stage enabled but no coarse_labels provided.", file=sys.stderr)
+            return 2
+        try:
+            coarse_labels = parse_labels(coarse_labels_default)
+        except ValueError as exc:
+            print(f"Invalid coarse_labels: {exc}", file=sys.stderr)
+            return 2
+        try:
+            coarse_to_fine = coerce_label_mapping(coarse_to_fine_default)
+        except ValueError as exc:
+            print(f"Invalid coarse_to_fine: {exc}", file=sys.stderr)
+            return 2
+        if not coarse_labels:
+            print("No coarse labels provided for two-stage classification.", file=sys.stderr)
+            return 2
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = CLIPModel.from_pretrained(args.model).to(device)
     processor = CLIPProcessor.from_pretrained(args.model)
     model.eval()
 
-    label_features, label_names = build_label_features(
+    fine_label_features, fine_label_names = build_label_features(
         model, processor, candidate_labels, args.prompt_template, prompts_by_label, device
     )
+    fine_label_to_index = {label: idx for idx, label in enumerate(fine_label_names)}
 
-    output_rows: List[Tuple[str, str, float]] = []
+    coarse_label_features: Optional[torch.Tensor] = None
+    coarse_label_names: List[str] = []
+    coarse_to_fine_features: Dict[str, Tuple[torch.Tensor, List[str]]] = {}
+    if args.two_stage:
+        coarse_label_features, coarse_label_names = build_label_features(
+            model, processor, coarse_labels, args.prompt_template, coarse_prompts_by_label, device
+        )
+        missing_mappings = [label for label in coarse_labels if label not in coarse_to_fine]
+        if missing_mappings:
+            print(
+                "Warning: no coarse_to_fine mapping for: "
+                + ", ".join(missing_mappings),
+                file=sys.stderr,
+            )
+        for coarse_label in coarse_labels:
+            fine_labels = coarse_to_fine.get(coarse_label, [])
+            if not fine_labels:
+                continue
+            indices = [
+                fine_label_to_index[label]
+                for label in fine_labels
+                if label in fine_label_to_index
+            ]
+            if not indices:
+                continue
+            subset_names = [fine_label_names[index] for index in indices]
+            coarse_to_fine_features[coarse_label] = (
+                fine_label_features[indices],
+                subset_names,
+            )
+
+    output_rows: List[Tuple[str, str, float, List[Tuple[str, float]]]] = []
     image_paths = list(iter_images(input_dir, args.recursive))
     if not image_paths:
         print("No images found.", file=sys.stderr)
@@ -376,9 +516,31 @@ def main() -> int:
 
     for image_path in image_paths:
         try:
-            label, score = classify_image(
-                model, processor, label_features, label_names, image_path, device
-            )
+            if args.two_stage and coarse_label_features is not None:
+                coarse_probs = classify_image_probs(
+                    model, processor, coarse_label_features, image_path, device
+                )
+                coarse_label, coarse_score = pick_best_label(
+                    coarse_label_names, coarse_probs
+                )
+                fine_subset = coarse_to_fine_features.get(coarse_label)
+                if fine_subset:
+                    subset_features, subset_names = fine_subset
+                    probs = classify_image_probs(
+                        model, processor, subset_features, image_path, device
+                    )
+                    label, score = pick_best_label(subset_names, probs)
+                    top_pairs = top_k_from_probs(subset_names, probs, top_k)
+                else:
+                    label = coarse_label
+                    score = coarse_score
+                    top_pairs = top_k_from_probs(coarse_label_names, coarse_probs, top_k)
+            else:
+                probs = classify_image_probs(
+                    model, processor, fine_label_features, image_path, device
+                )
+                label, score = pick_best_label(fine_label_names, probs)
+                top_pairs = top_k_from_probs(fine_label_names, probs, top_k)
         except Exception as exc:
             print(f"Skip {image_path}: {exc}", file=sys.stderr)
             continue
@@ -386,7 +548,7 @@ def main() -> int:
         if fallback_label and score < args.threshold:
             label = fallback_label
 
-        output_rows.append((str(image_path), label, score))
+        output_rows.append((str(image_path), label, score, top_pairs))
 
         if output_dir is not None:
             target_dir = output_dir / label
@@ -404,8 +566,19 @@ def main() -> int:
 
     with output_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["path", "label", "score"])
-        for row in output_rows:
+        header = ["path", "label", "score"]
+        if top_k > 1:
+            for idx in range(1, top_k + 1):
+                header.extend([f"top{idx}_label", f"top{idx}_score"])
+        writer.writerow(header)
+        for path_value, label_value, score_value, top_pairs in output_rows:
+            row = [path_value, label_value, score_value]
+            if top_k > 1:
+                for idx in range(top_k):
+                    if idx < len(top_pairs):
+                        row.extend([top_pairs[idx][0], top_pairs[idx][1]])
+                    else:
+                        row.extend(["", ""])
             writer.writerow(row)
 
     print(f"Processed {len(output_rows)} images.")

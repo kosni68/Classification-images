@@ -2,7 +2,64 @@
   "input_dir": "./Images_test",
   "labels": ["enfant", "famille", "travail", "potes", "sport", "vacances", "bricolages", "papiers", "autre"],
   "prompt_template": "a photo of {label}",
-  "model": "openai/clip-vit-base-patch32",
+  "model": "openai/clip-vit-large-patch14",
+  "top_k": 3,
+  "two_stage": true,
+  "coarse_labels": ["personnes", "travail", "sport", "vacances", "bricolages", "papiers", "autre"],
+  "coarse_to_fine": {
+    "personnes": ["enfant", "famille", "potes"],
+    "travail": ["travail"],
+    "sport": ["sport"],
+    "vacances": ["vacances"],
+    "bricolages": ["bricolages"],
+    "papiers": ["papiers"],
+    "autre": []
+  },
+  "coarse_label_prompts": {
+    "personnes": [
+      "a photo of people",
+      "a group of people",
+      "people smiling at the camera",
+      "people posing for a photo",
+      "a portrait of people"
+    ],
+    "travail": [
+      "an office scene",
+      "a workplace",
+      "people working at desks",
+      "a business meeting",
+      "a person working on a laptop"
+    ],
+    "sport": [
+      "sports action",
+      "people playing sports",
+      "athletes competing",
+      "a sports field or court"
+    ],
+    "vacances": [
+      "travel and vacation",
+      "a tourist photo",
+      "a beach or mountain trip",
+      "a sightseeing landmark"
+    ],
+    "bricolages": [
+      "DIY and tools",
+      "a workshop with tools",
+      "home improvement work",
+      "building or repairing something"
+    ],
+    "papiers": [
+      "documents and paperwork",
+      "papers and forms",
+      "official documents on a desk",
+      "receipts and invoices"
+    ],
+    "autre": [
+      "a random photo",
+      "a miscellaneous scene",
+      "an unrelated object"
+    ]
+  },
   "threshold": 0.1,
   "fallback_label": "autre",
   "output_csv": null,
