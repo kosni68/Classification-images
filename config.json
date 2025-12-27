@@ -4,6 +4,7 @@
   "prompt_template": "a photo of {label}",
   "model": "openai/clip-vit-large-patch14",
   "top_k": 3,
+  "batch_size": 4,
   "two_stage": true,
   "coarse_labels": ["personnes", "travail", "sport", "vacances", "bricolages", "papiers", "autre"],
   "coarse_to_fine": {

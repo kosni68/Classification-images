@@ -182,6 +182,11 @@ def iter_images(root: Path, recursive: bool) -> Iterable[Path]:
             yield path
 
 
+def iter_batches(items: List[Path], batch_size: int) -> Iterable[List[Path]]:
+    for index in range(0, len(items), batch_size):
+        yield items[index : index + batch_size]
+
+
 def normalize(x: torch.Tensor) -> torch.Tensor:
     return x / x.norm(dim=-1, keepdim=True)
 
@@ -259,6 +264,36 @@ def classify_image_probs(
     return logits.softmax(dim=-1).squeeze(0)
 
 
+def classify_batch_probs(
+    model: CLIPModel,
+    processor: CLIPProcessor,
+    label_features: torch.Tensor,
+    image_paths: List[Path],
+    device: str,
+) -> List[Tuple[Path, torch.Tensor]]:
+    images: List[Image.Image] = []
+    valid_paths: List[Path] = []
+    for image_path in image_paths:
+        try:
+            with Image.open(image_path) as img:
+                images.append(img.convert("RGB"))
+                valid_paths.append(image_path)
+        except Exception as exc:
+            print(f"Skip {image_path}: {exc}", file=sys.stderr)
+    if not images:
+        return []
+
+    image_inputs = processor(images=images, return_tensors="pt")
+    image_inputs = {k: v.to(device) for k, v in image_inputs.items()}
+    with torch.no_grad():
+        image_features = model.get_image_features(**image_inputs)
+    image_features = normalize(image_features)
+
+    logits = image_features @ label_features.T
+    probs = logits.softmax(dim=-1)
+    return list(zip(valid_paths, probs))
+
+
 def pick_best_label(label_names: List[str], probs: torch.Tensor) -> Tuple[str, float]:
     best_index = int(torch.argmax(probs).item())
     return label_names[best_index], float(probs[best_index].item())
@@ -317,6 +352,9 @@ def main() -> int:
     top_k_default = coerce_int(config.get("top_k"), 1)
     if top_k_default < 1:
         top_k_default = 1
+    batch_size_default = coerce_int(config.get("batch_size"), 4)
+    if batch_size_default < 1:
+        batch_size_default = 1
     coarse_labels_default = config.get("coarse_labels")
     coarse_to_fine_default = config.get("coarse_to_fine")
     two_stage_default = coerce_bool(config.get("two_stage"), False)
@@ -379,6 +417,12 @@ def main() -> int:
         help='Label to use when score is low. If omitted and "autre" is in labels, it is used.',
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=batch_size_default,
+        help="Number of images per batch.",
+    )
+    parser.add_argument(
         "--top-k",
         type=int,
         default=top_k_default,
@@ -421,6 +465,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     top_k = max(1, args.top_k)
+    batch_size = max(1, args.batch_size)
 
     if args.copy_to and args.move_to:
         print("Use only one of --copy-to or --move-to.", file=sys.stderr)
@@ -514,50 +559,87 @@ def main() -> int:
     elif args.move_to:
         output_dir = Path(args.move_to)
 
-    for image_path in image_paths:
-        try:
-            if args.two_stage and coarse_label_features is not None:
-                coarse_probs = classify_image_probs(
-                    model, processor, coarse_label_features, image_path, device
-                )
+    for batch_paths in iter_batches(image_paths, batch_size):
+        if args.two_stage and coarse_label_features is not None:
+            coarse_results = classify_batch_probs(
+                model, processor, coarse_label_features, batch_paths, device
+            )
+            if not coarse_results:
+                continue
+
+            ordered_paths = [path for path, _ in coarse_results]
+            coarse_info_by_path: Dict[Path, Tuple[str, float, List[Tuple[str, float]]]] = {}
+            results_by_path: Dict[Path, Tuple[str, float, List[Tuple[str, float]]]] = {}
+            fine_groups: Dict[str, List[Path]] = {}
+
+            for path, coarse_probs in coarse_results:
                 coarse_label, coarse_score = pick_best_label(
                     coarse_label_names, coarse_probs
                 )
+                coarse_top_pairs = top_k_from_probs(
+                    coarse_label_names, coarse_probs, top_k
+                )
+                coarse_info_by_path[path] = (
+                    coarse_label,
+                    coarse_score,
+                    coarse_top_pairs,
+                )
                 fine_subset = coarse_to_fine_features.get(coarse_label)
                 if fine_subset:
-                    subset_features, subset_names = fine_subset
-                    probs = classify_image_probs(
-                        model, processor, subset_features, image_path, device
-                    )
+                    fine_groups.setdefault(coarse_label, []).append(path)
+                else:
+                    results_by_path[path] = coarse_info_by_path[path]
+
+            for coarse_label, group_paths in fine_groups.items():
+                subset_features, subset_names = coarse_to_fine_features[coarse_label]
+                fine_results = classify_batch_probs(
+                    model, processor, subset_features, group_paths, device
+                )
+                for path, probs in fine_results:
                     label, score = pick_best_label(subset_names, probs)
                     top_pairs = top_k_from_probs(subset_names, probs, top_k)
-                else:
-                    label = coarse_label
-                    score = coarse_score
-                    top_pairs = top_k_from_probs(coarse_label_names, coarse_probs, top_k)
-            else:
-                probs = classify_image_probs(
-                    model, processor, fine_label_features, image_path, device
-                )
+                    results_by_path[path] = (label, score, top_pairs)
+
+            for path in ordered_paths:
+                result = results_by_path.get(path) or coarse_info_by_path.get(path)
+                if result is None:
+                    continue
+                label, score, top_pairs = result
+
+                if fallback_label and score < args.threshold:
+                    label = fallback_label
+
+                output_rows.append((str(path), label, score, top_pairs))
+
+                if output_dir is not None:
+                    target_dir = output_dir / label
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    target_path = unique_path(target_dir / path.name)
+                    if args.move_to:
+                        shutil.move(str(path), str(target_path))
+                    else:
+                        shutil.copy2(str(path), str(target_path))
+        else:
+            batch_results = classify_batch_probs(
+                model, processor, fine_label_features, batch_paths, device
+            )
+            for path, probs in batch_results:
                 label, score = pick_best_label(fine_label_names, probs)
                 top_pairs = top_k_from_probs(fine_label_names, probs, top_k)
-        except Exception as exc:
-            print(f"Skip {image_path}: {exc}", file=sys.stderr)
-            continue
 
-        if fallback_label and score < args.threshold:
-            label = fallback_label
+                if fallback_label and score < args.threshold:
+                    label = fallback_label
 
-        output_rows.append((str(image_path), label, score, top_pairs))
+                output_rows.append((str(path), label, score, top_pairs))
 
-        if output_dir is not None:
-            target_dir = output_dir / label
-            target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = unique_path(target_dir / image_path.name)
-            if args.move_to:
-                shutil.move(str(image_path), str(target_path))
-            else:
-                shutil.copy2(str(image_path), str(target_path))
+                if output_dir is not None:
+                    target_dir = output_dir / label
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    target_path = unique_path(target_dir / path.name)
+                    if args.move_to:
+                        shutil.move(str(path), str(target_path))
+                    else:
+                        shutil.copy2(str(path), str(target_path))
 
     if args.output_csv:
         output_path = Path(args.output_csv)
