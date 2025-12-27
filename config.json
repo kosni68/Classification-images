@@ -8,7 +8,7 @@
   "output_csv": null,
   "recursive": false,
   "copy_to": null,
-  "move_to": null,
+  "move_to": "./Images_test",
   "label_prompts": {
     "enfant": [
       "a photo of a child",
