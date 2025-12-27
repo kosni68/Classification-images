@@ -3,7 +3,7 @@
   "labels": ["enfant", "famille", "travail", "potes", "sport", "vacances", "bricolages", "papiers", "autre"],
   "prompt_template": "a photo of {label}",
   "model": "openai/clip-vit-base-patch32",
-  "threshold": 0.25,
+  "threshold": 0.1,
   "fallback_label": "autre",
   "output_csv": null,
   "recursive": false,
@@ -13,47 +13,89 @@
     "enfant": [
       "a photo of a child",
       "a photo of a kid",
-      "a photo of a boy",
-      "a photo of a girl"
+      "a photo of a baby",
+      "a photo of a toddler",
+      "a child playing",
+      "kids playing outdoors",
+      "a school child",
+      "a child with toys"
     ],
     "famille": [
       "a photo of a family",
       "a family portrait",
-      "parents with children"
+      "parents with children",
+      "a family gathering",
+      "a family dinner",
+      "a group family photo",
+      "a family celebration"
     ],
     "travail": [
-      "people working",
+      "people working in an office",
       "a person at work",
-      "office work",
-      "construction workers"
+      "an office desk with a laptop",
+      "a business meeting",
+      "coworkers in a meeting room",
+      "a workplace scene",
+      "a person working on a computer",
+      "a presentation at work",
+      "construction workers at a job site"
     ],
     "potes": [
       "a photo of friends",
       "a group of friends",
-      "friends hanging out"
+      "friends hanging out",
+      "friends smiling at the camera",
+      "a selfie with friends",
+      "friends at a party",
+      "friends at a restaurant"
     ],
     "sport": [
       "a sports scene",
       "people playing sports",
-      "athletes in action"
+      "athletes in action",
+      "a soccer game",
+      "a basketball game",
+      "running or jogging",
+      "cycling on a bike",
+      "a gym workout",
+      "fitness equipment"
     ],
     "vacances": [
       "a vacation photo",
       "people on holiday",
       "a beach vacation",
-      "tourist travel"
+      "a mountain vacation",
+      "tourist travel",
+      "a tourist landmark",
+      "a hotel room",
+      "an airport or travel scene",
+      "luggage and travel"
     ],
     "bricolages": [
       "a DIY project",
       "home improvement work",
-      "tools and construction",
-      "crafting at home"
+      "tools on a workbench",
+      "woodworking tools",
+      "assembling furniture",
+      "painting a wall",
+      "using a drill or screwdriver",
+      "repairing something at home"
     ],
     "papiers": [
       "documents and paperwork",
       "papers on a desk",
       "official documents",
-      "printed documents"
+      "printed documents",
+      "receipts and invoices",
+      "forms and contracts",
+      "letters and envelopes",
+      "passports and IDs",
+      "tickets and paperwork"
+    ],
+    "autre": [
+      "a random photo",
+      "a miscellaneous object",
+      "an unrelated scene"
     ]
   }
 }
