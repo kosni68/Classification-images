@@ -1,5 +1,5 @@
 {
-  "input_dir": "./Images_test",
+  "input_dir": "C:\\Users\\Nico\\Pictures\\Camera",
   "labels": ["enfant", "famille", "travail", "potes", "sport", "vacances", "bricolages", "papiers", "autre"],
   "prompt_template": "a photo of {label}",
   "model": "openai/clip-vit-large-patch14",
@@ -65,7 +65,7 @@
   "output_csv": null,
   "recursive": false,
   "copy_to": null,
-  "move_to": "./Images_test",
+  "move_to": "C:\\Users\\Nico\\Pictures\\Camera",
   "label_prompts": {
     "enfant": [
       "a photo of a child",
